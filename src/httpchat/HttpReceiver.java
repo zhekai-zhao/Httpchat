@@ -3,96 +3,124 @@ package httpchat;
 import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.util.HashMap;
+import java.util.Map;
 
 public class HttpReceiver {
     private ServerSocket serverSocket;
     private Socket socket;
-    private DataInputStream inputStream;
+    private InputStream rawInput;
     private static final int BUFFER_SIZE = 4096;
 
     public HttpReceiver(int port) throws IOException {
         this.serverSocket = new ServerSocket(port);
         this.socket = serverSocket.accept();
-        this.inputStream = new DataInputStream(new BufferedInputStream(socket.getInputStream()));
+        this.rawInput = socket.getInputStream();
     }
 
-    public void listenForMessages() {
-        try {
-            BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
-            String line;
+    public void listenForMessages() throws IOException {
+        System.out.println("Listening for messages...");
 
-            while (true) {
-                line = reader.readLine();
-                if (line == null) break;  // End of stream
+        while (true) {
+            // Read headers
+            String headers = readUntilEmptyLine();
+            
+            if (headers.isEmpty()) {
+                System.out.println("Connection closed by client.");
+                break;  // Connection closed by client
+            }
 
-                if (line.startsWith("GET")) {
-                    String path = line.split(" ")[1];
+            System.out.println("Headers received: " + headers);
 
-                    if ("/hello".equals(path)) {
-                        System.out.println("Connection message: Hello from Sender!");
-                    } else if ("/goodbye".equals(path)) {
-                        System.out.println("Termination message: Goodbye from Sender!");
-                        return;  // Exit the loop on receiving termination command
-                    }
+            if (headers.contains("GET /hello")) {
+                System.out.println("Connection message: Hello from Sender!");
+            } else if (headers.contains("GET /goodbye")) {
+                System.out.println("Termination message: Goodbye from Sender!");
+                break;  // We assume the goodbye message is the last one and close the loop
+            } else if (headers.contains("POST /sendfile")) {
+                // Extracting headers
+                Map<String, String> headerMap = extractHeaders(headers);
+                int contentLength = Integer.parseInt(headerMap.get("Content-Length"));
+                String fileName = headerMap.get("FileName");
 
-                    // Skip rest of the headers
-                    while (!"".equals(line = reader.readLine()));
+                receiveFile(fileName, contentLength);
+                System.out.println("File received.");
+            } else if (headers.contains("POST /sendmessage")) {
+                // Extracting headers
+                Map<String, String> headerMap = extractHeaders(headers);
+                int contentLength = Integer.parseInt(headerMap.get("Content-Length"));
 
-                } else if (line.startsWith("POST")) {
-                    // Skip all header lines until the blank line
-                    while (!"".equals(line = reader.readLine()));
+                String message = readInputString(contentLength);
+                System.out.println("Received message: " + message);
+            } else {
+                System.err.println("Unknown request: " + headers);
+            }
+        }
+    }
 
-                    int command = inputStream.readInt();
+    // Helper function to extract headers from the received string
+    private Map<String, String> extractHeaders(String headers) {
+        Map<String, String> headerMap = new HashMap<>();
+        String[] lines = headers.split("\r\n");
+        for (String line : lines) {
+            String[] parts = line.split(": ", 2);
+            if (parts.length == 2) {
+                headerMap.put(parts[0], parts[1]);
+            }
+        }
+        return headerMap;
+    }
 
-                    switch (command) {
-                        case 1:  // This is a message
-                            String message = inputStream.readUTF();
-                            System.out.println("Received message: " + message);
-                            break;
-                        case 2:  // This is a file
-                            receiveFile();
-                            System.out.println("File received.");
-                            break;
-                        default:
-                            System.err.println("Unknown command received: " + command);
-                            break;
-                    }
+
+    private String readUntilEmptyLine() throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        int prev = -1, current;
+        while ((current = rawInput.read()) != -1) {
+            out.write(current);
+            if (prev == '\r' && current == '\n') {
+                int next = rawInput.read();
+                if (next == '\r') {
+                    int next2 = rawInput.read();
+                    if (next2 == '\n') break;
+                } else {
+                    out.write(next);
                 }
             }
-        } catch (IOException e) {
-            System.err.println("Error occurred while reading from the socket: " + e.getMessage());
+            prev = current;
         }
+        String result = out.toString("UTF-8");
+        System.out.println("Headers received: " + result);
+        return result;
     }
 
-
-
-    public void receiveFile() throws IOException {
-        BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
-        String fileDetails = reader.readLine();
-
-        String[] details = fileDetails.split(":");
-        String fileName = details[1];
-        long fileSize = Long.parseLong(details[2]);
-
-        File file = new File(fileName);
-        FileOutputStream fos = new FileOutputStream(file);
-
-        byte[] buffer = new byte[BUFFER_SIZE];
-        long remaining = fileSize;
-
-        while (remaining > 0) {
-            int bytesRead = inputStream.read(buffer, 0, (int)Math.min(BUFFER_SIZE, remaining));
-            fos.write(buffer, 0, bytesRead);
-            remaining -= bytesRead;
+    private String readInputString(int length) throws IOException {
+        byte[] bytes = new byte[length];
+        int bytesRead = 0;
+        while (bytesRead < length) {
+            int result = rawInput.read(bytes, bytesRead, length - bytesRead);
+            if (result == -1) break;
+            bytesRead += result;
         }
-
+        String result = new String(bytes, "UTF-8");
+        System.out.println("Body received: " + result);
+        return result;
+    }
+    
+    public void receiveFile(String fileName, long fileSize) throws IOException {
+    	System.out.println("Receiving file: " + fileName + " of size: " + fileSize);
+        FileOutputStream fos = new FileOutputStream(fileName);
+        byte[] buffer = new byte[BUFFER_SIZE];
+        long totalBytesRead = 0;
+        while (totalBytesRead < fileSize) {
+            int bytesRead = rawInput.read(buffer);
+            fos.write(buffer, 0, bytesRead);
+            totalBytesRead += bytesRead;
+        }
         fos.close();
     }
 
-
-
     public void close() throws IOException {
-        inputStream.close();
+        rawInput.close();
         socket.close();
         serverSocket.close();
     }
