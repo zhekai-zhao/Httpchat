@@ -36,7 +36,7 @@ public class HttpReceiver {
                 System.out.println("Connection message: Hello from Sender!");
             } else if (headers.contains("GET /goodbye")) {
                 System.out.println("Termination message: Goodbye from Sender!");
-                break;  // We assume the goodbye message is the last one and close the loop
+                break;  // assume the goodbye message is the last one and close the loop
             } else if (headers.contains("POST /sendfile")) {
                 // Extracting headers
                 Map<String, String> headerMap = extractHeaders(headers);
